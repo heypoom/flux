@@ -1,0 +1,1629 @@
+class Board {
+  Tile[][] board;
+  int moveCount;
+  int correctTiles;
+  int centerTileX;
+  int centerTileY;
+  Board(Tile[][] b, int m, int c, int x, int y) {
+    board = b;
+    moveCount = m;
+    correctTiles = c;
+    centerTileX = x;
+    centerTileY = y;
+  }
+  Board clone() {
+    Tile[][] board2 = new Tile[board.length][board[0].length];
+    for (int y = 0; y < board.length; y++) {
+      for (int x = 0; x < board[0].length; x++) {
+        board2[y][x] = new Tile(board[y][x].value);
+      }
+    }
+    return new Board(board2, moveCount, correctTiles, centerTileX, centerTileY);
+  }
+}
+
+
+
+class Event {
+  int size;
+  int mainType; // 0 = sandbox, 1 = normal, 2 = blind, 3 = FMC
+  boolean regripless;
+  int fingerSize;
+  int bandageCount;
+  public Event(int s, int m, boolean r, int f, int b) {
+    size = s;
+    mainType = m;
+    regripless = r;
+    fingerSize = f;
+    bandageCount = b;
+  }
+  Event clone() {
+    return new Event(size, mainType, regripless, fingerSize, bandageCount);
+  }
+}
+
+
+
+class Move {
+  boolean isHorizontal;
+  int distance;
+  int x;
+  int y;
+  public Move(boolean i, int d, int tx, int ty) {
+    isHorizontal = i;
+    distance = d;
+    x = tx;
+    y = ty;
+  }
+}
+
+
+
+class Solve {
+  double moves;
+  double time;
+  double mps;
+  double longestPause;
+  double memoTime;
+  double execTime;
+
+  boolean isDNF;
+
+  int averageStartIndex;
+  int averageEndIndex;
+  ArrayList<ArrayList<Integer>> excludedIndices;
+  public Solve(double m, double t, double p, double l, double memo, double exec, boolean i) { // for singles
+    moves = m;
+    time = t;
+    mps = p;
+    longestPause = l;
+    memoTime = memo;
+    execTime = exec;
+    isDNF = i;
+
+    averageStartIndex = averageEndIndex = -1;
+    excludedIndices = null;
+  }
+  public Solve(double[] s, int start, int end, ArrayList<ArrayList<Integer>> e, boolean isDNFt) { // for averages
+    moves = s[0];
+    time = s[1];
+    mps = s[2];
+    longestPause = s[3];
+    memoTime = s[4];
+    execTime = s[5];
+    averageStartIndex = start;
+    averageEndIndex = end;
+    excludedIndices = e;
+    isDNF = isDNFt;
+  }
+  public double getStat(int type) {
+    if (type == 0) {
+      return moves;
+    } else if (type == 1) {
+      return time;
+    } else if (type == 2) {
+      return mps;
+    } else if (type == 3) {
+      return longestPause;
+    } else if (type == 4) {
+      return memoTime;
+    } else if (type == 5) {
+      return execTime;
+    }
+    return -1;
+  }
+  boolean hasExtreme(int index, int stat) {
+    if (excludedIndices == null) {
+      return false;
+    }
+    for (Integer i : excludedIndices.get(stat)) {
+      if (i == index) {
+        return true;
+      }
+    }
+    return false;
+  }
+  Solve clone() {
+    Solve clone = new Solve(moves, time, mps, longestPause, memoTime, execTime, isDNF);
+    clone.averageStartIndex = averageStartIndex;
+    clone.averageEndIndex = averageEndIndex;
+    clone.excludedIndices = excludedIndices;
+    return clone;
+  }
+  String getMoveCountString(boolean isAverage, boolean isLong) {
+    String num = "";
+    if (isAverage) {
+      num = nf((float)moves, 0, 2);
+    } else {
+      num = ""+(int)moves;
+    }
+    String append = "mov";
+    if (isLong) {
+      if (abs((float)moves-1) < 0.001) {
+        append = "move";
+      } else {
+        append = "moves";
+      }
+    }
+    return num+" "+append;
+  }
+  String getMPSString() {
+    float fmps = (float)mps;
+    if (fmps == Infinity || fmps == -Infinity) {
+      return "Inf mps";
+    }
+    return nf(fmps, 0, 2)+" mps";
+  }
+}
+
+
+
+class Tile {
+  int value;
+  public Tile(int v) {
+    value = v;
+  }
+}
+
+
+
+String version = "1.2.12";
+String[] letters = {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"};
+
+final int WIDTH = 1000;
+
+int BOARD_WIDTH = 5;
+int BOARD_HEIGHT = 5;
+float TILE_SIZE = 200;
+int STAT_COUNT = 6;
+
+final int GAME_MODE = 0;
+
+final int[][] SOLVES_IN_AVERAGE = {{1, 0}, {3, 0}, {5, 1}, {12, 1}, {50, 3}, {100, 5}};
+Board board;
+Board[] historyExtremeBoards;
+float[] shades;
+float[][] transitions;
+PFont font;
+int highlightX = 2;
+int highlightY = 2;
+boolean horizontalLast = false;
+int UI_SIZE = 300;
+int startMillis = -1;
+int endMillis = -1;
+int blindMidMillis = -1;
+Solve currentSolve;
+Solve highlightedAverage;
+ArrayList<Solve> solves = new ArrayList<Solve>(0);
+Solve[][] averageSolves = new Solve[SOLVES_IN_AVERAGE.length][STAT_COUNT+1];
+int highlightedSolve = -9999;
+int highlightedStat = 1;
+
+color[] switchTileColors = {color(0,0,0), color(0,150,0),color(200,150,0), color(0,0,255)};
+String[] textureNames = {"Original", "Only colors", "Only symbols", "Coordinates", "Switchtile"};
+
+int texturePack = 0;
+int TEXTURE_PACK_COUNT = 5;
+boolean offScreenDragging = false;
+
+boolean isUntouchedScrambled = false;
+
+int timeSinceLastWASD = -9999;
+
+int resizeDelay = 0;
+
+float TRANSITION_FACTOR = 0.64;
+boolean lastMoused = true;
+boolean isSpaceDown = false;
+boolean isShiftDown = false;
+boolean isGameTapHappening = false;
+
+boolean sandboxMode = false;
+
+float timeOfLastMove = -1;
+float maxPause = 0;
+float scrollY = 0;
+float scrollVY = 0;
+
+color[] aoColors = {color(150, 150, 255), color(0, 255, 255), color(0, 255, 0), color(255, 255, 0), color(255, 140, 30), color(255, 70, 70)};
+String[] aoNames = {"single", "mo3", "ao5", "ao12", "ao50", "ao100"};
+String[] statNames = {"Moves", "Time", "MPS", "Longest pause", "Memo", "Exec"};
+
+PGraphics solveList;
+int SOLVE_LIST_X = 1010;
+int SOLVE_LIST_Y = 310;
+int SOLVE_LIST_W = 280;
+int SOLVE_LIST_H = 690;
+int SOLVE_LIST_FMC_H = 390;
+
+PGraphics averageList;
+int AVERAGE_LIST_X = 690;
+int AVERAGE_LIST_Y = 1010;
+int AVERAGE_LIST_W = 600;
+int AVERAGE_LIST_H = 280;
+float draggingSolveListY = -999999;
+float startDragY = -999;
+int resetMenuOn = 0;
+int prevMouseX = 0;
+int prevMouseY = 0;
+boolean blindfoldDown = false;
+
+int nonRepeatPressMillis = -9999;
+ArrayList<Move> moveHistory;
+int locationInHistory;
+
+boolean isMouseDown = false;
+
+Event currentEvent;
+Event upcomingEvent;
+void setup() {
+  fullScreen();
+  moveHistory = new ArrayList<Move>(0);
+  locationInHistory = 0;
+  solveList = createGraphics(SOLVE_LIST_W, SOLVE_LIST_H);
+  averageList = createGraphics(AVERAGE_LIST_W, AVERAGE_LIST_H);
+
+  frameRate(60);
+  font = loadFont("ArialMT-48.vlw");
+
+  upcomingEvent = new Event(5, 1, false, 1, 0);
+  resetBoard(upcomingEvent);
+  size(1300, 1300);
+  noSmooth();
+  noStroke();
+}
+void resetBoard(Event newEvent) {
+  currentEvent = newEvent.clone();
+
+  if (!blind() && highlightedStat >= 4) {
+    highlightedStat = 1;
+  }
+  int inputSize = currentEvent.size;
+
+  horizontalLast = false;
+  isUntouchedScrambled = false;
+
+  BOARD_HEIGHT = inputSize;
+  BOARD_WIDTH = inputSize;
+
+  highlightX = (int)((BOARD_WIDTH-1)/2);
+  highlightY = (int)((BOARD_HEIGHT-1)/2);
+
+  TILE_SIZE = ((float)1000.0)/inputSize;
+
+
+  shades = new float[BOARD_HEIGHT*BOARD_WIDTH];
+  clearTransitions();
+
+  resetActualBoard();
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < max(BOARD_HEIGHT, BOARD_WIDTH); j++) {
+      transitions[i][j] = 0;
+    }
+  }
+  currentSolve = new Solve(-1, -1, -1, -1, -1, -1, true);
+  solves.clear();
+  for (int aIndex = 0; aIndex < SOLVES_IN_AVERAGE.length; aIndex++) {
+    for (int stat = 0; stat <= STAT_COUNT; stat++) {
+      averageSolves[aIndex][stat] = new Solve(-1, -1, -1, -1, -1, -1, true);
+    }
+  }
+
+  startMillis = -1;
+  endMillis = -1;
+  blindMidMillis = -1;
+
+  timeOfLastMove = -1;
+  maxPause = 0;
+  calculateAverages();
+
+  if (currentEvent.mainType == 0) {
+    startMillis = millis();
+    highlightedStat = 0;
+    timeOfLastMove = millis();
+  } else if (currentEvent.mainType == 3) {
+    highlightedStat = 0;
+  } else {
+    highlightedStat = 1;
+  }
+  blindfoldDown = false;
+  moveHistory.clear();
+  locationInHistory = 0;
+  frameRate(60);
+}
+void resetActualBoard() {
+  int cx = (int)((BOARD_WIDTH-1)/2);
+  int cy = (int)((BOARD_HEIGHT-1)/2);
+  int ct = BOARD_WIDTH*BOARD_HEIGHT;
+  board = new Board(new Tile[BOARD_HEIGHT][BOARD_WIDTH], 0, ct, cx, cy);
+  historyExtremeBoards = new Board[2];
+  historyExtremeBoards[0] = new Board(new Tile[BOARD_HEIGHT][BOARD_WIDTH], 0, ct, cx, cy);
+  historyExtremeBoards[1] = new Board(new Tile[BOARD_HEIGHT][BOARD_WIDTH], 0, ct, cx, cy);
+  for (int y = 0; y < BOARD_HEIGHT; y++) {
+    for (int x = 0; x < BOARD_WIDTH; x++) {
+      board.board[y][x] = new Tile(y*BOARD_WIDTH+x);
+      historyExtremeBoards[0].board[y][x] = new Tile(y*BOARD_WIDTH+x);
+      historyExtremeBoards[1].board[y][x] = new Tile(y*BOARD_WIDTH+x);
+      shades[y*BOARD_WIDTH+x] = random(0.5, 1.0);
+    }
+  }
+}
+void clearTransitions() {
+  transitions = new float[2][max(BOARD_WIDTH, BOARD_HEIGHT)];
+}
+void draw() {
+  if (mousePressed) {
+    if (!isMouseDown) {
+      mousePressedAlt();
+    }
+    isMouseDown = true;
+  } else {
+    if (isMouseDown) {
+      mouseReleasedAlt();
+    }
+    isMouseDown = false;
+  }
+  if (isGameTapHappening && endMillis == -1) {
+    if (!offScreenDragging && (mouseX < 0 || mouseX >= 1000 || mouseY < 0 || mouseY >= 1000)) {
+      isGameTapHappening = false;
+    }
+  }
+  if (isGameTapHappening && endMillis == -1) {
+    lastMoused = true;
+    int newX = floor((float)mouseX/TILE_SIZE+BOARD_WIDTH)%BOARD_WIDTH;
+    int newY = floor((float)mouseY/TILE_SIZE+BOARD_HEIGHT)%BOARD_HEIGHT;
+
+    int xDiff = (newX-highlightX+BOARD_WIDTH*20)%BOARD_WIDTH;
+    int yDiff = (newY-highlightY+BOARD_HEIGHT*20)%BOARD_HEIGHT;
+    if (BOARD_WIDTH == 2) {
+      if (xDiff != 0) {
+        if (mouseX > prevMouseX) {
+          moveSingular(true, 1);
+        } else {
+          moveSingular(true, -1);
+        }
+      }
+      if (yDiff != 0) {
+        if (mouseY > prevMouseY) {
+          moveSingular(false, 1);
+        } else {
+          moveSingular(false, -1);
+        }
+      }
+    } else {
+      if (xDiff > (int)(BOARD_WIDTH/2)) {
+        moveSingular(true, xDiff-BOARD_WIDTH);
+      } else if (xDiff > 0) {
+        moveSingular(true, xDiff);
+      }
+      if (yDiff > (int)(BOARD_HEIGHT/2)) {
+        moveSingular(false, yDiff-BOARD_HEIGHT);
+      } else if (yDiff > 0) {
+        moveSingular(false, yDiff);
+      }
+    }
+  }
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < max(BOARD_HEIGHT, BOARD_WIDTH); j++) {
+      transitions[i][j] *= TRANSITION_FACTOR;
+    }
+  }
+  float desiredY = scrollY;
+  if (draggingSolveListY >= -999990) {
+    desiredY = (mouseY-SOLVE_LIST_Y)-draggingSolveListY;
+    if (abs(startDragY-mouseY) >= 20) {
+      highlightedSolve = -999999;
+      highlightedAverage = null;
+    }
+  }
+  setScrollY(desiredY);
+
+  background(160, 200, 250);
+  for (int y = 0; y < BOARD_HEIGHT; y++) {
+    for (int x = 0; x < BOARD_WIDTH; x++) {
+      float blindFlash = 0;
+      float ax = x;
+      if (horizontalLast) {
+        ax += transitions[0][y];
+        blindFlash = min(1, abs(transitions[0][y]));
+      }
+      ax = (ax+BOARD_WIDTH)%BOARD_WIDTH;
+      float ay = y;
+      if (!horizontalLast) {
+        ay += transitions[1][x];
+        blindFlash = min(1, abs(transitions[1][x]));
+      }
+      ay = (ay+BOARD_HEIGHT)%BOARD_HEIGHT;
+      int i = board.board[y][x].value;
+      while (ay > -1) {
+        float aax = ax;
+        while (aax > -1) {
+          boolean isGripTile = ((currentEvent.regripless || GAME_MODE == 1) && x == board.centerTileX && y == board.centerTileY);
+          if (isGripTile) {
+            fill(255, 255, 255);
+            rect(aax*TILE_SIZE, ay*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          } else if (blindfoldDown) {
+            fill(0);
+            rect(aax*TILE_SIZE, ay*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            fill(128+128*blindFlash);
+            float m = TILE_SIZE*0.05;
+            rect(aax*TILE_SIZE+m, ay*TILE_SIZE+m, TILE_SIZE-m*2, TILE_SIZE-m*2);
+          } else if(texturePack == 2){
+            fill(128+128*blindFlash);
+            rect(aax*TILE_SIZE, ay*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }else if(texturePack == 4){
+            int sx = (int)(i%BOARD_WIDTH);
+            int sy = (int)(i/BOARD_WIDTH);
+            int isx = (BOARD_WIDTH-1)-sx;
+            int isy = (BOARD_HEIGHT-1)-sy;
+            int[] ordering = {0,1,2,3};
+            boolean justOne = false;
+            if(sx == isx && sy == isy){ // keep it the same
+            }else if(sx == sy && sx < isx){
+              ordering[0] = 0; ordering[1] = 0; ordering[2] = 3; ordering[3] = 3;
+            }else if(sx == sy && sx > isx){
+              ordering[0] = 1; ordering[1] = 1; ordering[2] = 2; ordering[3] = 2;
+            }else if(isx == sy && sx < isx){
+              ordering[0] = 3; ordering[3] = 3; ordering[1] = 2; ordering[2] = 2;
+            }else if(isx == sy && sx > isx){
+              ordering[0] = 0; ordering[3] = 0; ordering[1] = 1; ordering[2] = 1;
+            }else if(sy < sx && sy < isx){
+              justOne = true;
+              ordering[0] = 0;
+            }else if(isy < sx && isy < isx){
+              justOne = true;
+              ordering[0] = 2;
+            }else if(sx < sy && sx < isy){
+              justOne = true;
+              ordering[0] = 3;
+            }else{
+              justOne = true;
+              ordering[0] = 1;
+            }
+            if(justOne){
+              fill(switchTileColors[ordering[0]]);
+              rect(aax*TILE_SIZE, ay*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            }else{
+              pushMatrix();
+              translate((aax+0.5)*TILE_SIZE, (ay+0.5)*TILE_SIZE);
+              for(int j = 0; j < 4; j++){
+                fill(switchTileColors[ordering[j]]);
+                beginShape();
+                vertex(0,0);
+                vertex(-0.5*TILE_SIZE, -0.5*TILE_SIZE);
+                vertex(0.5*TILE_SIZE, -0.5*TILE_SIZE);
+                endShape();
+                rotate(PI/2);
+              }
+              popMatrix();
+            }
+          }else{
+            float colorX = (float)(i%BOARD_WIDTH)/(BOARD_WIDTH-1);
+            float colorY = (float)(i/BOARD_WIDTH)/(BOARD_HEIGHT-1);
+            fill((1-colorX)*255, colorY*255, colorX*255);
+            rect(aax*TILE_SIZE, ay*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
+          if (blindfoldDown || texturePack == 1) {
+          }else{
+            float w = 1;
+            String s = "";
+            if(texturePack == 0 || texturePack == 2 || texturePack == 4){
+              if(BOARD_WIDTH*BOARD_HEIGHT > 26) {
+                s = (i+1);
+                w = 1.61;
+                if(BOARD_WIDTH*BOARD_HEIGHT >= 100) {
+                  w = 1.98;
+                }
+              }else{
+                s = letters[i];
+                w = 1.09;
+              }
+            }else if(texturePack == 3){
+              s = (x+1)+","+(BOARD_HEIGHT-y);
+              w = 2.08;
+              if(BOARD_WIDTH*BOARD_HEIGHT >= 100) {
+                w = 2.6;
+              }
+            }
+            fill(0);
+            if(texturePack == 4 && !isGripTile){
+              fill(255,255,255,100);
+            }
+            textFont(font,TILE_SIZE/w);
+            text(s, (aax+0.5)*TILE_SIZE, (ay+0.5+0.355/w)*TILE_SIZE);
+          }
+          if ((!lastMoused || currentEvent.regripless) && x == highlightX && y == highlightY) {
+            noFill();
+            float f = TILE_SIZE*0.038;
+            strokeWeight(f*2);
+            stroke(abs((frameCount*20)%510-255));
+            if (isSpaceDown || millis()-timeSinceLastWASD < 500) {
+              rect(aax*TILE_SIZE+f*2, ay*TILE_SIZE+f*2, TILE_SIZE-f*4, TILE_SIZE-f*4);
+              line(aax*TILE_SIZE+f*2, ay*TILE_SIZE+f*2, aax*TILE_SIZE+f*6, ay*TILE_SIZE+f*6);
+              line((aax+1)*TILE_SIZE-f*2, ay*TILE_SIZE+f*2, (aax+1)*TILE_SIZE-f*6, ay*TILE_SIZE+f*6);
+              line(aax*TILE_SIZE+f*2, (ay+1)*TILE_SIZE-f*2, aax*TILE_SIZE+f*6, (ay+1)*TILE_SIZE-f*6);
+              line((aax+1)*TILE_SIZE-f*2, (ay+1)*TILE_SIZE-f*2, (aax+1)*TILE_SIZE-f*6, (ay+1)*TILE_SIZE-f*6);
+            } else {
+              rect(aax*TILE_SIZE+f, ay*TILE_SIZE+f, TILE_SIZE-f*2, TILE_SIZE-f*2);
+            }
+            noStroke();
+          }
+          aax -= BOARD_WIDTH;
+        }
+        ay -= BOARD_HEIGHT;
+      }
+    }
+  }
+  if (resetMenuOn == 1) {
+    drawMenu();
+  } else if (resetMenuOn == 2) {
+    drawOptionsMenu();
+  }
+  drawUI();
+  if (currentEvent.mainType >= 1) {
+    drawLists();
+  }
+  if (fmc() && startMillis >= 0 && endMillis == -1) {
+    drawFMCbuttons();
+  }
+  drawHighlightedSolve();
+  resizeDelay = max(0, resizeDelay-1);
+  prevMouseX = mouseX;
+  prevMouseY = mouseY;
+}
+void drawUI() {
+  fill(0);
+  rect(BOARD_WIDTH*TILE_SIZE, 0, UI_SIZE, BOARD_HEIGHT*TILE_SIZE);
+  rect(0, 1000, 1300, 300);
+  fill(255, 255, 255);
+  if (currentEvent.mainType == 0) { // Sandbox mode!
+    updateLongestPause(false);
+    currentSolve = new Solve(board.moveCount, millis()-startMillis, getMPS(), maxPause, -1, -1, false);
+    displayButton(1150, 70, 3);
+    displaySolveFull(currentSolve, 0, 1150, 200, 1);
+  } else if (startMillis >= 0 && endMillis >= 0) { // A solved just finished. It's over.
+    displayButton(1150, 70, blind() ? 4 : 1);
+    displaySolveFull(solves.get(solves.size()-1), 0, 1150, 200, 2);
+    if (solves.get(solves.size()-1).isDNF && (resetMenuOn == 0)) {
+      drawX();
+    }
+  } else if (startMillis >= 0) { // A solve is currently in session. Timer running.
+    updateLongestPause(false);
+    int memo = -1;
+    int exec = -1;
+    if (blind() && blindMidMillis >= 0) {
+      memo = blindMidMillis-startMillis;
+      exec = millis()-blindMidMillis;
+    }
+    currentSolve = new Solve(board.moveCount, millis()-startMillis, getMPS(), maxPause, memo, exec, false);
+    displayButton(1150, 70, (fmc() && solvedBoard(board)) ? 8 : (blind() ? (blindfoldDown ? ((board.moveCount == 0) ? 7 : 6) : 5) : 2));
+    displaySolveFull(currentSolve, 0, 1150, 200, 1);
+  } else if (isUntouchedScrambled) { // The puzzle is scrambled. Waiting for the user to start solving it!
+    displayButton(1150, 70, 0);
+  } else if (!sandboxMode) { // This is at the very beginning. No solve has started, but we gotta encourage the user to scramble it.
+    displayButton(1150, 70, blind() ? 4 : 1);
+  } else { // Sandbox mode. In sandbox mode, the timer is always running, so it should be caught at the top, but just in case...
+    displayButton(1150, 70, 3);
+  }
+  fill(80);
+  rect(350, 1010, 330, 280, 30);
+  fill(255);
+  textAlign(CENTER);
+  textFont(font, 50);
+  text("Options", 515, 1165);
+
+  fill(80);
+  rect(10, 1010, 330, 280, 30);
+  fill(255);
+  textAlign(CENTER);
+  textFont(font, 36);
+  text("Loopover v"+version+"\nCurrent event:", 175, 1050);
+  text(getEventName(), 175, 1138);
+  text("(Make new game?)", 175, 1270);
+}
+void drawFMCbuttons() {
+  float y = SOLVE_LIST_Y+SOLVE_LIST_FMC_H;
+  textAlign(CENTER);
+  textFont(font, 36);
+  drawUndoRedo(1010, y+10, 135, "Undo\nonce", (locationInHistory >= 1));
+  drawUndoRedo(1155, y+10, 135, "Redo\nonce", (locationInHistory < moveHistory.size()));
+  drawUndoRedo(1010, y+160, 135, "Undo\nto start", (locationInHistory >= 1));
+  drawUndoRedo(1155, y+160, 135, "Redo\nto end", (locationInHistory < moveHistory.size()));
+}
+void drawUndoRedo(float x, float y, float w, String s, boolean condition) {
+  if (condition) {
+    fill(0, 100, 0);
+    rect(x, y, w, 140, 30);
+    fill(255);
+    text(s, x+w/2, y+68);
+  } else {
+    fill(80);
+    rect(x, y, w, 140, 30);
+    fill(160);
+    text(s, x+w/2, y+68);
+  }
+}
+void drawHighlightedSolve() {
+  if (highlightedSolve >= 0) {
+    displaySolveFull(solves.get(highlightedSolve), highlightedSolve, 1150, SOLVE_LIST_Y+20+highlightedSolve*40+scrollY, 0);
+  } else if (highlightedSolve >= -6) {
+    float y = min(-1-highlightedSolve, 3.9);
+    displaySolveFull(highlightedAverage, highlightedSolve, AVERAGE_LIST_X+460, AVERAGE_LIST_Y+40+y*40, 0);
+  } else if (highlightedSolve >= -12) {
+    float y = min(-7-highlightedSolve, 3.9);
+    displaySolveFull(highlightedAverage, highlightedSolve, AVERAGE_LIST_X+300, AVERAGE_LIST_Y+40+y*40, 0);
+  }
+}
+void drawLists() {
+  fill(255);
+  textAlign(CENTER);
+  textFont(font, 36);
+  text("Solves ("+solves.size()+")", 1150, SOLVE_LIST_Y-10);
+  image(solveList, SOLVE_LIST_X, SOLVE_LIST_Y);
+  image(averageList, AVERAGE_LIST_X, AVERAGE_LIST_Y);
+}
+void updateLists() {
+  updateSolveList();
+  updateAverageList();
+}
+void updateSolveList() {
+  solveList.beginDraw();
+  solveList.background(0);
+  solveList.fill(80);
+  solveList.rect(0, 0, 280, getSolveListH());
+  solveList.pushMatrix();
+  solveList.translate(0, scrollY);
+  int startI = min(max((int)(-scrollY/40.0), 0), solves.size());
+  int endI = min(max((int)((getSolveListH()-scrollY)/40.0+1), 0), solves.size());
+  for (int i = startI; i < endI; i++) {
+    displaySolveLite(solves.get(i), i, 140, 20+i*40, solveList);
+  }
+  solveList.popMatrix();
+  if (fmc()) {
+    solveList.fill(0);
+    solveList.rect(0, SOLVE_LIST_FMC_H, 280, SOLVE_LIST_H-SOLVE_LIST_FMC_H);
+  }
+  solveList.endDraw();
+}
+void updateAverageList() {
+  averageList.beginDraw();
+  averageList.background(80);
+  averageList.textFont(font, 36);
+  averageList.textAlign(CENTER);
+  averageList.fill(255);
+  averageList.text("Best", 300, 34);
+  averageList.text("Current", 500, 34);
+  for (int aIndex = 0; aIndex < SOLVES_IN_AVERAGE.length; aIndex++) {
+    float y = 60+aIndex*40;
+
+    displaySolveLite(averageSolves[aIndex][highlightedStat], -1-aIndex, 300, y, averageList);
+    displaySolveLite(averageSolves[aIndex][STAT_COUNT], -1-aIndex, 500, y, averageList);
+
+    String label = aoNames[aIndex]+":";
+    averageList.textAlign(RIGHT);
+    averageList.text(label, 180, y+14);
+  }
+  averageList.endDraw();
+}
+int getSolveListH() {
+  if (fmc()) {
+    return SOLVE_LIST_FMC_H;
+  } else {
+    return SOLVE_LIST_H;
+  }
+}
+void drawX() {
+  pushMatrix();
+  translate(500, 500);
+  rotate(PI/4);
+  fill(random(0, 255), 0, 0, 128);
+  rect(-500, -60, 1000, 120);
+  rect(-60, -500, 120, 440);
+  rect(-60, 60, 120, 440);
+  popMatrix();
+}
+void mouseOut() {
+  if(!offScreenDragging){
+    isGameTapHappening = false;
+  }
+}
+void mouseIn() {
+  if(!offScreenDragging){
+    isMouseDown = true;
+  }
+}
+void drawMenu() {
+  fill(255, 255, 255, 170);
+  rect(0, 0, 1000, 1000);
+  fill(0);
+  textAlign(CENTER);
+  textFont(font, 50);
+  text("u wanna new game kiddo?", 500, 120);
+  drawMenuButton("Create it now!", 700, 850, 360, true);
+  drawMenuButton("Type: "+intToEventType(upcomingEvent.mainType), 500, 250, 600, true);
+
+  drawMenuButton("Size: "+upcomingEvent.size+" x "+upcomingEvent.size, 500, 400, 600, false);
+  drawMenuButton("<", 120, 400, 120, (upcomingEvent.size >= 3));
+  drawMenuButton(">", 880, 400, 120, (upcomingEvent.size <= 19));
+
+  drawMenuButton(regriplessToName(upcomingEvent.regripless), 500, 550, 600, true);
+  drawMenuButton("Finger size: "+upcomingEvent.fingerSize+" x "+upcomingEvent.fingerSize, 500, 700, 600, false);
+  drawMenuButton("<", 120, 700, 120, (upcomingEvent.fingerSize >= 2));
+  drawMenuButton(">", 880, 700, 120, (upcomingEvent.fingerSize <= 19));
+  drawMenuButton("Cancel", 300, 850, 360, true);
+}
+void drawOptionsMenu() {
+  fill(255, 255, 255, 170);
+  rect(0, 0, 1000, 1000);
+  fill(0);
+  textAlign(CENTER);
+  textFont(font, 50);
+  text("Options", 500, 120);
+
+  String offOrNot = " Off";
+  if (offScreenDragging) {
+    offOrNot = " On";
+  }
+
+  drawMenuButton("Highlighted stat: "+statNames[highlightedStat], 500, 250, 600, true);
+  drawMenuButton("Texture pack: "+textureNames[texturePack], 500, 400, 600, true);
+  drawMenuButton("Off-screen dragging: "+offOrNot, 500, 550, 600, true);
+  drawMenuButton("Useless button", 500, 700, 600, true);
+  drawMenuButton("OK", 500, 850, 600, true);
+}
+String intToEventType(int n) {
+  String[] names = {"Sandbox", "Sighted", "Blind", "Fewest moves"};
+  return names[n];
+}
+String regriplessToName(boolean n) {
+  if (!n) {
+    return "Free movement";
+  } else {
+    return "No regrips";
+  }
+}
+void drawMenuButton(String s, int x, int y, int w, boolean pressable) {
+  pushMatrix();
+  translate(x, y);
+  if (pressable) {
+    fill(0, 128, 0);
+  } else {
+    fill(80);
+  }
+  rect(-w/2, -60, w, 120, 30);
+  textAlign(CENTER);
+  textFont(font, 50);
+  fill(255);
+  text(s, 0, 15);
+  popMatrix();
+}
+String getEventName() {
+  String s = intToEventType(currentEvent.mainType)+" "+BOARD_WIDTH+" x "+BOARD_HEIGHT+"\n"+
+    regriplessToName(currentEvent.regripless)+"\nFinger size: "+currentEvent.fingerSize;
+  return s;
+}
+void displayButton(float x, float y, int theMode) {
+  pushMatrix();
+  translate(x, y);
+  textAlign(CENTER);
+  textFont(font, 50);
+  if (theMode == 1 || (theMode >= 4 && theMode != 7)) {
+    fill(80);
+    rect(-140, -60, 280, 120, 30);
+  }
+  fill(255);
+  String[] titles = {"Solve it!", "Scramble", "Keep going", "Sandbox\nmode", "Scramble\nand memo", 
+    "Lower\nblindfold", "Raise\nblindfold", "Make a\nmove.", "Submit\nsolution"};
+  String str = titles[theMode];
+  int ty = 14;
+  if (str.indexOf("\n") >= 0) {
+    ty = -11;
+  }
+  text(str, 0, ty);
+  popMatrix();
+}
+void displaySolveFull(Solve s, int index, float x, float y, int greenText) {
+  pushMatrix();
+  translate(x, y);
+  textAlign(CENTER);
+  if (index < 0) {
+    fill(aoColors[(-1-index)%6]);
+    rect(-140, -30, 280, 120, 30);
+    fill(0);
+    textFont(font, 28);
+    String str = "Best ";
+    if (index <= -7) {
+      str = "Current ";
+    }
+    text(str+aoNames[(-1-index)%6], 0, 84);
+  }
+  if (greenText >= 1) {
+    fill(0, 100, 0);
+  } else {
+    fill(40);
+  }
+  rect(-140, -60, 280, 120, 30);
+  fill(255);
+  if (greenText == 2) {
+    fill(0, 255, 0);
+  }
+  String main = "";
+  String alt1 = "";
+  String alt2 = "";
+  if (index < 0 && s.isDNF && s.time == -1) {
+    textFont(font, 50);
+    text("DNS", 0, -13);
+  } else {
+    if (highlightedStat == 0) {
+      main = s.getMoveCountString((index < 0), true);
+      alt1 = "Time: "+timeToStringSolve(s, true);
+      alt2 = nf((float)s.mps, 0, 2)+" mps, "+timeToStringDouble(s.longestPause)+" lp";
+    } else if (highlightedStat == 1 || highlightedStat == 4 || highlightedStat == 5) {
+      main = timeToStringSolve(s, true);
+      alt1 = s.getMoveCountString((index < 0), false)+",  "+s.getMPSString();
+      alt2 = "Longest pause: "+timeToStringDouble(s.longestPause);
+    } else if (highlightedStat == 2) {
+      main = nf((float)s.mps, 0, 2)+" mps";
+      alt1 = "Time: "+timeToStringSolve(s, true);
+      alt2 = s.getMoveCountString((index < 0), false)+",  "+timeToStringDouble(s.longestPause)+" lp";
+    } else if (highlightedStat == 3) {
+      main = timeToStringDouble(s.longestPause)+" pause";
+      alt1 = "Time: "+timeToStringSolve(s, true);
+      alt2 = s.getMoveCountString((index < 0), false)+",  "+s.getMoveCountString((index < 0), false);
+    }
+    if (s.isDNF) {
+      main = "DNF("+main+")";
+    }
+    int textSize = 50;
+    textFont(font, textSize);
+    while (textWidth(main) >= 270) {
+      textSize--;
+      textFont(font, textSize);
+    }
+    text(main, 0, -13);
+    textFont(font, 28);
+    text(alt1, 0, 20);
+    text(alt2, 0, 50);
+  }
+
+  popMatrix();
+}
+void displaySolveLite(Solve s, int index, float x, float y, PGraphics img) {
+  img.pushMatrix();
+  img.translate(x, y);
+  img.textAlign(CENTER);
+  if (index%10 >= 5) {
+    img.noStroke();
+    img.fill(110);
+    img.rect(-140, -20, 280, 40);
+  }
+
+  int ha = -1;
+  if (highlightedSolve >= -20 && highlightedSolve < 0) {
+    ha = -1-highlightedSolve;
+  }
+
+  String str = "-";
+  if (index < 0 && s.isDNF && s.time == -1) {
+    str = "DNS";
+  } else {
+    if (s.time < -0.1) {
+      str = "DNF";
+    } else {
+      if (highlightedStat == 0) {
+        str = s.getMoveCountString((index < 0), false);
+      } else if (highlightedStat == 1) {
+        str = timeToStringSolve(s, false);
+      } else if (highlightedStat == 2) {
+        str = nf((float)s.mps, 0, 2)+" mps";
+      } else {
+        str = timeToStringDouble(s.getStat(highlightedStat));
+        if (highlightedStat >= 4 && !blind()) {
+          str = "N/A";
+        }
+      }
+    }
+    if (s.isDNF) {
+      str = "DNF("+str+")";
+    }
+    if (ha >= 0 && highlightedAverage.hasExtreme(index, highlightedStat)) {
+      str = "("+str+")";
+    }
+  }
+  img.fill(255);
+  if (index < 0) {
+    img.fill(aoColors[-1-index]);
+  }
+  if (ha >= 0) {
+    int startIndex = highlightedAverage.averageStartIndex;
+    int endIndex = highlightedAverage.averageEndIndex;
+    if (index >= startIndex && index < endIndex) {
+      img.fill(aoColors[ha%6]);
+    } else {
+      img.fill(128);
+    }
+  }
+  int textSize = 36;
+  img.textFont(font, textSize);
+  while (img.textWidth(str) >= 200) {
+    textSize--;
+    img.textFont(font, textSize);
+  }
+  img.text(str, 0, 14);
+  img.popMatrix();
+}
+boolean blind() {
+  return (currentEvent.mainType == 2);
+}
+boolean fmc() {
+  return (currentEvent.mainType == 3);
+}
+boolean solvedBoard(Board board) {
+  return (board.correctTiles == BOARD_WIDTH*BOARD_HEIGHT);
+}
+String toChar(int i) {
+  if (i < 10) {
+    return i+"";
+  } else {
+    return letters[i-10];
+  }
+}
+/*boolean isMoveableTile(boolean isHorizontal) {
+ return (GAME_MODE != 1 || 
+ ((highlightX == board.centerTileX && !isHorizontal) || 
+ (highlightY == board.centerTileY && isHorizontal)));
+ }*/
+String timeToStringSolve(Solve s, boolean blindExtra) {
+  String str = timeToStringDouble(s.time);
+  if (s.memoTime >= 0 && blindExtra) {
+    if (highlightedStat == 4) {
+      str = timeToStringDouble(s.memoTime)+" + "+timeToStringDouble(s.execTime);
+    } else if (highlightedStat == 5) {
+      str = timeToStringDouble(s.memoTime)+" + "+timeToStringDouble(s.execTime);
+    } else {
+      str = str+" ["+timeToStringDouble(s.memoTime)+"]";
+    }
+  }
+  return str;
+}
+String timeToStringDouble(double mil) {
+  return timeToStringInt((int)Math.round(mil));
+}
+String timeToStringInt(int mil) {
+  int sec = mil%60000;
+  int min = floor(mil/60000)%60;
+  int hrs = floor(mil/3600000);
+  if (min == 0 && hrs == 0) {
+    return nf((float)(sec)/1000, 0, 3);
+  } else if (hrs == 0) {
+    return min+":"+nf((float)(sec)/1000, 2, 3);
+  } else {
+    return hrs+":"+nf(min, 2, 0)+":"+nf((float)(sec)/1000, 2, 3);
+  }
+}
+void mousePressedAlt() {
+  if (resetMenuOn == 2) {
+    if(mouseX >= 1000 || mouseY >= 1000){
+      resetMenuOn = 0;
+    }else if (abs(mouseX-500) <= 300) {
+      if (abs(mouseY-250) <= 60) {
+        int maxAllowed = 6;
+        if(!blind()){
+          maxAllowed = 4;
+        }
+        highlightedStat = (highlightedStat+1)%maxAllowed;
+        updateLists();
+      } else if (abs(mouseY-400) <= 60) {
+        texturePack = (texturePack+1)%TEXTURE_PACK_COUNT;
+      } else if (abs(mouseY-550) <= 60) {
+        offScreenDragging = !offScreenDragging;
+      } else if (abs(mouseY-850) <= 60) {
+        resetMenuOn = 0;
+      }
+    }
+  } else if (resetMenuOn == 1) {
+    if (abs(mouseX-700) <= 180 && abs(mouseY-850) <= 60) {
+      resetMenuOn = 0;
+      resetBoard(upcomingEvent);
+    } else if ((abs(mouseX-300) <= 180 && abs(mouseY-850) <= 60) || mouseX >= 1000 || mouseY >= 1000) {
+      resetMenuOn = 0;
+    } else if (abs(mouseX-500) <= 300 && abs(mouseY-250) <= 60) {
+      upcomingEvent.mainType = (upcomingEvent.mainType+1)%4;
+    } else if (abs(mouseX-500) <= 300 && abs(mouseY-550) <= 60) {
+      upcomingEvent.regripless = !upcomingEvent.regripless;
+    } else if (abs(mouseX-120) <= 60 && abs(mouseY-400) <= 60) {
+      upcomingEvent.size = max(upcomingEvent.size-1, 2);
+    } else if (abs(mouseX-880) <= 60 && abs(mouseY-400) <= 60) {
+      upcomingEvent.size = min(upcomingEvent.size+1, 20);
+    } else if (abs(mouseX-120) <= 60 && abs(mouseY-700) <= 60) {
+      upcomingEvent.fingerSize = max(upcomingEvent.fingerSize-1, 1);
+    } else if (abs(mouseX-880) <= 60 && abs(mouseY-700) <= 60) {
+      upcomingEvent.fingerSize = min(upcomingEvent.fingerSize+1, 20);
+    }
+  } else {
+    draggingSolveListY = -999999;
+    boolean hsChanged = false;
+    if (mouseY >= 1000) {
+      if (mouseX < 345) {
+        resetMenuOn = 1;
+        upcomingEvent = currentEvent.clone();
+      } else if (mouseX >= 350 && mouseX < 680) {
+        resetMenuOn = 2;
+      } else if (mouseX >= AVERAGE_LIST_X && mouseX < AVERAGE_LIST_X+AVERAGE_LIST_W && 
+        mouseY >= AVERAGE_LIST_Y && mouseY < AVERAGE_LIST_Y+AVERAGE_LIST_H) {
+        int theY = (int)((mouseY-AVERAGE_LIST_Y-40)/40.0);
+        int theX = (int)((mouseX-AVERAGE_LIST_X-200)/200.0);
+        int hstb = -1;
+        if (theX == 0 && theY >= 0 && theY < 6) {
+          hstb = -7-theY;
+        } else if (theX == 1 && theY >= 0 && theY < 6) {
+          hstb = -1-theY;
+        }
+        if (hstb != highlightedSolve) {
+          hsChanged = true;
+          highlightedSolve = hstb;
+          if (highlightedSolve >= -6) {
+            highlightedAverage = averageSolves[-1-highlightedSolve][STAT_COUNT];
+          } else {
+            highlightedAverage = averageSolves[-1-highlightedSolve-6][highlightedStat];
+          }
+          focusScrollYOnSolveIndex(highlightedAverage.averageStartIndex);
+          updateLists();
+        }
+      }
+    } else if (mouseX >= 1000) {
+      if (mouseX >= SOLVE_LIST_X && mouseX < SOLVE_LIST_X+SOLVE_LIST_W && 
+        mouseY >= SOLVE_LIST_Y && mouseY < SOLVE_LIST_Y+getSolveListH()) {
+        draggingSolveListY = mouseY-SOLVE_LIST_Y-scrollY;
+        startDragY = mouseY;
+        int hstb = (int)((mouseY-SOLVE_LIST_Y-scrollY)/40.0);
+        if (hstb >= 0 && hstb < solves.size()) {
+          if (hstb != highlightedSolve) {
+            hsChanged = true;
+            highlightedSolve = hstb;
+            updateLists();
+          }
+        }
+      }
+      if (mouseY < 140) {
+        if (resizeDelay <= 0) {
+          dealWithEnter();
+          resizeDelay = 10;
+        }
+      }
+      if (fmc() && startMillis >= 0 && endMillis == -1) {
+        if (mouseY >= 850 && mouseY < 1000) {
+          if (mouseX >= 1000 && mouseX < 1150) {
+            revertToScrambleState(0);
+          } else if (mouseX >= 1150 && mouseX < 1300) {
+            revertToScrambleState(1);
+          }
+        }
+        if (mouseY >= 700 && mouseY < 850) {
+          if (mouseX >= 1000 && mouseX < 1150) {
+            undo();
+          } else if (mouseX >= 1150 && mouseX < 1300) {
+            redo();
+          }
+        }
+      }
+    } else if (mouseY >= 1000) {
+    } else {
+      int xTap = floor(mouseX/TILE_SIZE%BOARD_WIDTH)%BOARD_WIDTH;
+      int yTap = floor(mouseY/TILE_SIZE%BOARD_HEIGHT)%BOARD_HEIGHT;
+      if (!currentEvent.regripless || 
+        (highlightX == xTap && highlightY == yTap)) {
+        isGameTapHappening = true;
+        highlightX = xTap;
+        highlightY = yTap;
+      }
+    }
+    if (!hsChanged) {
+      highlightedSolve = -999999;
+      highlightedAverage = null;
+      updateLists();
+    }
+  }
+}
+void mouseReleasedAlt() {
+  draggingSolveListY = -999999;
+  isGameTapHappening = false;
+}
+void keyPressed() {
+  if (key == '\n') {
+    dealWithEnter();
+  } else if (endMillis == -1) {
+    lastMoused = false;
+  }
+  if (key == ' ') {
+    isSpaceDown = true;
+  }
+  if (key == CODED && keyCode == SHIFT) {
+    isShiftDown = true;
+  }
+  if (isShiftDown && BOARD_WIDTH*BOARD_HEIGHT <= 26) {
+    int theKey = (int)(key);
+    if (theKey <= 64+26) {
+      theKey -= 65;
+    } else {
+      theKey -= 97;
+    }
+    if (theKey >= 0 && theKey < 26 && !currentEvent.regripless) {
+      for (int x = 0; x < BOARD_WIDTH; x++) {
+        for (int y = 0; y < BOARD_HEIGHT; y++) {
+          if (board.board[y][x].value == theKey) {
+            highlightX = x;
+            highlightY = y;
+          }
+        }
+      }
+    }
+  } else {
+    boolean shouldGrip = (isSpaceDown || currentEvent.regripless);
+    if (endMillis == -1) {
+      if (key == 'd' || key == 'D' || key == 'a' || key == 'A' || 
+        key == 's' || key == 'S' || key == 'w' || key == 'W') {
+        timeSinceLastWASD = millis();
+      }
+      if ((rightPressed() && shouldGrip) || key == 'd' || key == 'D') {
+        moveSingular(true, 1);
+      } else if ((leftPressed() && shouldGrip) || key == 'a' || key == 'A') {
+        moveSingular(true, -1);
+      } else if ((downPressed() && shouldGrip) || key == 's' || key == 'S') {
+        moveSingular(false, 1);
+      } else if ((upPressed() && shouldGrip) || key == 'w' || key == 'W') {
+        moveSingular(false, -1);
+      }
+    }
+    if (!isSpaceDown && !currentEvent.regripless) {
+      if (rightPressed()) {
+        highlightX = (highlightX+1)%BOARD_WIDTH;
+      } else if (leftPressed()) {
+        highlightX = (highlightX+BOARD_WIDTH-1)%BOARD_WIDTH;
+      } else if (downPressed()) {
+        highlightY = (highlightY+1)%BOARD_HEIGHT;
+      } else if (upPressed()) {
+        highlightY = (highlightY+BOARD_HEIGHT-1)%BOARD_HEIGHT;
+      }
+    }
+  }
+}
+boolean rightPressed() {
+  return ((key == CODED && keyCode == RIGHT) || key == 'l' || key == 'L');
+}
+boolean leftPressed() {
+  return ((key == CODED && keyCode == LEFT) || key == 'j' || key == 'J');
+}
+boolean downPressed() {
+  return ((key == CODED && keyCode == DOWN)|| key == 'k' || key == 'K');
+}
+boolean upPressed() {
+  return ((key == CODED && keyCode == UP) || key == 'i' || key == 'I');
+}
+void keyReleased() {
+  if (key == ' ') {
+    isSpaceDown = false;
+  }
+  if (key == CODED && keyCode == SHIFT) {
+    isShiftDown = false;
+  }
+}
+void dealWithEnter() {
+  if (!resetMenuOn) {
+    if (fmc() && startMillis >= 0 && endMillis == -1 && solvedBoard(board)) {
+      if (millis()-nonRepeatPressMillis >= 0) {
+        solvedStuff(false);
+        nonRepeatPressMillis = millis();
+      }
+    } else if (blind() && startMillis >= 0 && endMillis == -1) {
+      if (!blindfoldDown) {
+        lowerBlindfold();
+      } else if (board.moveCount >= 1) {
+        raiseBlindfold();
+      }
+    } else if (endMillis >= 0 || (!isUntouchedScrambled && startMillis == -1)) {
+      float low = pow(max(BOARD_WIDTH, BOARD_HEIGHT), 1.4)*8+25;
+      float high = pow(max(BOARD_WIDTH, BOARD_HEIGHT), 1.5)*10+50;
+      scramble((int)(random(low, high)), true);
+    }
+  }
+}
+void revertToScrambleState(int type) {
+  board = historyExtremeBoards[type].clone();
+  if (type == 0) {
+    locationInHistory = 0;
+  } else {
+    locationInHistory = moveHistory.size();
+  }
+  clearTransitions();
+  updateLongestPause(true);
+}
+void lowerBlindfold() {
+  if (!blindfoldDown && blindMidMillis == -1) {
+    blindfoldDown = true;
+    blindMidMillis = millis();
+    maxPause = 0;
+    timeOfLastMove = millis();
+  }
+}
+void raiseBlindfold() {
+  blindfoldDown = false;
+  solvedStuff(!solvedBoard(board));
+}
+boolean hasCentralTile(int x, int y) {
+  int unitsOver = (int)((BOARD_HEIGHT-1)/2);
+  int valueToHave = unitsOver*BOARD_WIDTH+unitsOver;
+  return (board.board[y][x].value == valueToHave);
+}
+void undo() {
+  if (locationInHistory >= 1) {
+    Move lastMove = moveHistory.get(locationInHistory-1);
+    move(lastMove.isHorizontal, -lastMove.distance, lastMove.x, lastMove.y, 2);
+    locationInHistory--;
+  }
+}
+void redo() {
+  if (locationInHistory < moveHistory.size()) {
+    Move nextMove = moveHistory.get(locationInHistory);
+    move(nextMove.isHorizontal, nextMove.distance, nextMove.x, nextMove.y, 3);
+    locationInHistory++;
+  }
+}
+void moveSingular(boolean isHorizontal, int distance) {
+  if (distance >= 0) {
+    for (int i = 0; i < distance; i++) {
+      move(isHorizontal, 1, highlightX, highlightY, 1);
+    }
+  } else {
+    for (int i = 0; i < -distance; i++) {
+      move(isHorizontal, -1, highlightX, highlightY, 1);
+    }
+  }
+}
+
+void move(boolean isHorizontal, int distance, int hx, int hy, int moveType) { // types: 0 = scramble, 1 = normal, 2 = undo, 3 = redo
+  if (resetMenuOn) {
+    return;
+  }
+  if (currentEvent.regripless && !hasCentralTile(hx, hy)) {
+    return;
+  }
+  if (moveType == 1 && endMillis >= 0) {
+    return;
+  }
+  if (moveType >= 1 && blind()) {
+    lowerBlindfold();
+  }
+  if (moveType == 1) {
+    while (moveHistory.size() > locationInHistory) {
+      moveHistory.remove(moveHistory.size()-1);
+    }
+    moveHistory.add(new Move(isHorizontal, distance, hx, hy));
+    locationInHistory++;
+  }
+  int f = currentEvent.fingerSize;
+  int hxp_start = hx+BOARD_WIDTH*20-(int)((f-1)/2);
+  int hyp_start = hy+BOARD_HEIGHT*20-(int)((f-1)/2);
+  if (isHorizontal) {
+    for (int hyp = hyp_start; hyp < hyp_start+f; hyp++) {
+      int hyp2 = hyp%BOARD_HEIGHT;
+
+      int[] oldRowState = new int[BOARD_WIDTH];
+      for (int x = 0; x < BOARD_WIDTH; x++) {
+        oldRowState[x] = board.board[hyp2][x].value;
+      }
+      for (int x = 0; x < BOARD_WIDTH; x++) {
+        int oldX = (x+BOARD_WIDTH*20-distance)%BOARD_WIDTH;
+        setBoardTile(x, hyp2, oldRowState[oldX], (moveType == 1));
+      }
+      if (hyp2 == hy) highlightX+=distance;
+      setTransitions(0, hyp2, -distance, (moveType == 0));
+    }
+    horizontalLast = true;
+  } else {
+    for (int hxp = hxp_start; hxp < hxp_start+f; hxp++) {
+      int hxp2 = hxp%BOARD_WIDTH;
+
+      int[] oldColumnState = new int[BOARD_HEIGHT];
+      for (int y = 0; y < BOARD_HEIGHT; y++) {
+        oldColumnState[y] = board.board[y][hxp2].value;
+      }
+      for (int y = 0; y < BOARD_HEIGHT; y++) {
+        int oldY = (y+BOARD_HEIGHT*20-distance)%BOARD_HEIGHT;
+        setBoardTile(hxp2, y, oldColumnState[oldY], (moveType == 1));
+      }
+      if (hxp2 == hx) highlightY+=distance;
+      setTransitions(1, hxp2, -distance, (moveType == 0));
+    }
+    horizontalLast = false;
+  }
+  highlightX = (highlightX+BOARD_WIDTH)%BOARD_WIDTH;
+  highlightY = (highlightY+BOARD_HEIGHT)%BOARD_HEIGHT;
+  if (moveType == 0) {
+    startMillis = -1;
+    blindMidMillis = -1;
+    isUntouchedScrambled = true;
+  } else if (moveType == 1) {
+    if (startMillis == -1 && isUntouchedScrambled) {
+      startMillis = millis();
+    }
+    isUntouchedScrambled = false;
+    board.moveCount += abs(distance);
+    historyExtremeBoards[1].moveCount = board.moveCount;
+    updateLongestPause(true);
+  } else if (moveType == 2) {
+    board.moveCount -= abs(distance);
+    updateLongestPause(true);
+  } else if (moveType == 3) {
+    board.moveCount += abs(distance);
+    updateLongestPause(true);
+  }
+  if (solvedBoard(board)) {
+    if (currentEvent.mainType == 1 && startMillis >= 0) {
+      solvedStuff(false);
+    }
+  } else if (endMillis >= 0) {
+    startMillis = -1;
+    endMillis = -1;
+    blindMidMillis = -1;
+  }
+}
+void setTransitions(int i, int j, int distance, boolean isScramble) {
+  for (int k = 0; k < BOARD_WIDTH; k++) {
+    if (isScramble) {
+      transitions[1-i][k] = min(max(transitions[1-i][k], -2), 2);
+    } else {
+      transitions[1-i][k] = 0;
+    }
+  }
+  transitions[i][j] += distance;
+}
+void updateLongestPause(boolean updateLastMove) {
+  if (timeOfLastMove >= 0 && millis()-timeOfLastMove >= maxPause) {
+    maxPause = millis()-timeOfLastMove;
+  }
+  if (updateLastMove) {
+    timeOfLastMove = millis();
+  }
+}
+void solvedStuff(boolean isDNF) {
+  endMillis = millis();
+  lastMoused = true;
+  int memo = -1;
+  int exec = -1;
+  if (blind() && blindMidMillis >= 0) {
+    memo = blindMidMillis-startMillis;
+    exec = endMillis-blindMidMillis;
+  }
+  solves.add(new Solve(board.moveCount, endMillis-startMillis, getMPS(), maxPause, memo, exec, isDNF));
+  calculateAverages();
+  focusScrollYOnSolveIndex(solves.size()-1);
+  maxPause = 0;
+  timeOfLastMove = -1;
+}
+void focusScrollYOnSolveIndex(int i) {
+  setScrollY(-i*40+60);
+}
+void setScrollY(float y) {
+  float cappedY = min(max(y, getSolveListH()-solves.size()*40-3), 0);
+  if (abs(cappedY-scrollY) >= 0.1) {
+    scrollY = cappedY;
+    updateSolveList();
+  }
+}
+void calculateAverages() {
+  for (int aIndex = 0; aIndex < SOLVES_IN_AVERAGE.length; aIndex++) {
+    //println(aIndex+"   sized averages");
+    int avgSize = SOLVES_IN_AVERAGE[aIndex][0];
+    if (solves.size() >= avgSize) {
+      int excludedSize = SOLVES_IN_AVERAGE[aIndex][1];
+      double[] avgStats = new double[STAT_COUNT];
+      ArrayList<ArrayList<Integer>> excludedIndices = new ArrayList<ArrayList<Integer>>(0);
+      for (int i = 0; i < STAT_COUNT; i++) {
+        excludedIndices.add(new ArrayList<Integer>(0));
+      }
+      boolean countingDNF = false;
+      for (int stat = 0; stat < STAT_COUNT; stat++) {
+        //println("is it the quicksort."+stat);
+        ArrayList<Integer> sortedSolveIndices = quickSortSolves(solves.size()-avgSize, solves.size()-1, stat);
+        //println("nooo"+stat);
+        double totalSum = 0;
+        int totalCount = 0;
+        for (int i = 0; i < avgSize; i++) {
+          int sIndex = sortedSolveIndices.get(i);
+          //println("SI: "+sIndex);
+          if (i < excludedSize || i >= avgSize-excludedSize) {
+            excludedIndices.get(stat).add(sIndex);
+          } else {
+            double thisStat = solves.get(sIndex).getStat(stat);
+            totalSum += thisStat;
+            totalCount++;
+            if (solves.get(sIndex).isDNF) {
+              countingDNF = true;
+            }
+          }
+        }
+        /*if (countingDNF) {
+         avgStats[stat] = -1;
+         } else {*/
+        avgStats[stat] = totalSum/totalCount;
+        //}
+        //println("sum: "+totalSum+",   count: "+totalCount+",  result = "+avgStats[stat]);
+      }
+      averageSolves[aIndex][STAT_COUNT] = new Solve(avgStats, solves.size()-avgSize, solves.size(), excludedIndices, countingDNF);
+      Solve thisAverage = averageSolves[aIndex][STAT_COUNT];
+      for (int stat = 0; stat < STAT_COUNT; stat++) {
+        Solve averageToCompare = averageSolves[aIndex][stat];
+        boolean isBetter = true;
+        if (thisAverage.isDNF && !averageToCompare.isDNF) {
+          isBetter = false;
+        } else if (!thisAverage.isDNF && averageToCompare.isDNF) {
+          isBetter = true;
+        } else if (isBetterFunc(thisAverage.getStat(stat), averageToCompare.getStat(stat), stat)) {
+          isBetter = true;
+        } else {
+          isBetter = false;
+        }
+        if (isBetter) {
+          averageSolves[aIndex][stat] = thisAverage.clone();
+        }
+      }
+    } else {
+      averageSolves[aIndex][STAT_COUNT] = new Solve(-1, -1, -1, -1, -1, -1, true);
+    }
+  }
+  updateLists();
+}
+ArrayList<Integer> quickSortSolves(int start, int end, int stat) {
+  ArrayList<Integer> sortedIndices = new ArrayList<Integer>(0);
+  for (int i = start; i <= end; i++) {
+    sortedIndices.add(i);
+  }
+  return quickSort(sortedIndices, stat);
+}
+ArrayList<Integer> quickSort(ArrayList<Integer> indicesToSort, int stat) {
+  if (indicesToSort.size() <= 1) {
+    return indicesToSort;
+  }
+  int size = indicesToSort.size();
+  int pivot = (int)(random(size));
+  int numberAtPivot = indicesToSort.get(pivot);
+  ArrayList<Integer> lessThan = new ArrayList<Integer>(0);
+  ArrayList<Integer> greaterThan = new ArrayList<Integer>(0);
+  for (int i = 0; i < size; i++) {
+    if (i != pivot) {
+      int numberAtIndex = indicesToSort.get(i);
+      if (quickSortCompareTo(numberAtIndex, numberAtPivot, stat)) {
+        lessThan.add(numberAtIndex);
+      } else {
+        greaterThan.add(numberAtIndex);
+      }
+    }
+  }
+  ArrayList<Integer> sortedList = quickSort(lessThan, stat);
+  sortedList.add(numberAtPivot);
+  sortedList.addAll(quickSort(greaterThan, stat));
+  return sortedList;
+}
+boolean quickSortCompareTo(int a, int b, int stat) {
+  Solve sa = solves.get(a);
+  Solve sb = solves.get(b);
+  if (sa.isDNF && !sb.isDNF) {
+    return false;
+  } else if (!sa.isDNF && sb.isDNF) {
+    return true;
+  }
+  return isBetterFunc(sa.getStat(stat), sb.getStat(stat), stat);
+}
+boolean isBetterFunc(double a, double b, int stat) {
+  boolean directionBigger = (stat == 2);
+  boolean is_a_dnf = (a < 0);
+  boolean is_b_dnf = (b < 0);
+  if (is_a_dnf && is_b_dnf) {
+    return false;
+  } else if (is_a_dnf && !is_b_dnf) {
+    return false;
+  } else if (!is_a_dnf && is_b_dnf) {
+    return true;
+  }
+  if (directionBigger) {
+    return (a >= b);
+  } else {
+    return (a <= b);
+  }
+}
+void setBoardTile(int x, int y, int value, boolean expandingHistory) {
+  if (isCorrect(x, y)) board.correctTiles--;
+  board.board[y][x].value = value;
+  if (isCorrect(x, y)) board.correctTiles++;
+
+  int k = (int)((BOARD_HEIGHT-1)/2);
+  if (value == BOARD_WIDTH*k+k) {
+    board.centerTileX = x;
+    board.centerTileY = y;
+  }
+
+  if (expandingHistory) {
+    historyExtremeBoards[1].board[y][x].value = value;
+    historyExtremeBoards[1].correctTiles = board.correctTiles;
+    historyExtremeBoards[1].centerTileX = x;
+    historyExtremeBoards[1].centerTileY = y;
+  }
+}
+boolean isCorrect(int x, int y) {
+  return (board.board[y][x].value == y*BOARD_WIDTH+x);
+}
+void scramble(int scrambleMoveCount, boolean topLevel) {
+  if (topLevel) {
+    resetActualBoard();
+  }
+  for (int i = 0; i < scrambleMoveCount; i++) {
+    boolean isHorizontal = (random(0, 1) < 0.5);
+    if (currentEvent.regripless) {
+      isHorizontal = ((i%2) == 0);
+    }
+    int distance = (int)random(0, BOARD_WIDTH);
+    if (distance > (int)(BOARD_WIDTH/2)) {
+      distance -= BOARD_WIDTH;
+    }
+    if (currentEvent.regripless) {
+      highlightX = board.centerTileX;
+      highlightY = board.centerTileY;
+      move(isHorizontal, distance, highlightX, highlightY, 0);
+    } else {
+      move(isHorizontal, distance, floor(random(0, BOARD_WIDTH)), floor(random(0, BOARD_HEIGHT)), 0);
+    }
+  }
+  if (solvedBoard(board)) { // I do it this weird way so that 1-move scrambles aren't slightly more common.
+    scramble(scrambleMoveCount, false);
+  }
+  if (topLevel) {
+    historyExtremeBoards[0] = board.clone();
+    historyExtremeBoards[1] = board.clone();
+    moveHistory.clear();
+    locationInHistory = 0;
+    blindfoldDown = false;
+    if (blind()) {
+      startMillis = millis();
+      clearTransitions();
+    } else if (fmc()) {
+      startMillis = millis();
+    }
+  }
+}
+float getMPS() {
+  float mps = 0;
+  if (blind() || fmc()) {
+    if (endMillis >= 0) {
+      mps = ((float)1000.0)*board.moveCount/(endMillis-blindMidMillis);
+    } else {
+      mps = ((float)1000.0)*board.moveCount/(millis()-blindMidMillis);
+    }
+  } else {
+    if (board.moveCount >= 2) {
+      int effectiveMoveCount = board.moveCount-1;
+      if (endMillis >= 0) {
+        mps = ((float)1000.0)*effectiveMoveCount/(endMillis-startMillis);
+      } else {
+        mps = ((float)1000.0)*effectiveMoveCount/(millis()-startMillis);
+      }
+    }
+  }
+  return mps;
+}
+void drawYayUBox() {
+  fill(255, 255, 255, 100);
+  float b = BOARD_WIDTH*TILE_SIZE;
+  rect(0, 0, b, b);
+  fill(50);
+  rect(0.18*b, 0.38*b, 0.64*b, 0.24*b);
+  fill(200);
+  rect(0.2*b, 0.4*b, 0.6*b, 0.2*b);
+  fill(128);
+  rect(0.3*b, 0.5*b, 0.4*b, 0.08*b);
+  fill(0);
+  textFont(font, 48);
+  textAlign(CENTER);
+  text("You did it! yay u", b*0.5, b*0.465);
+  text("go away, box", b*0.5, b*0.555);
+}
